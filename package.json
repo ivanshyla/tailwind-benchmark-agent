@@ -1,0 +1,13 @@
+{
+  "name": "tailwind-benchmark-agent-monorepo",
+  "private": true,
+  "license": "MIT",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "npm test --workspaces --if-present",
+    "desktop": "npm run start --workspace=apps/desktop"
+  }
+}
