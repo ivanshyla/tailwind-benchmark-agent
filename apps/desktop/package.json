@@ -1,0 +1,45 @@
+{
+  "name": "tailwind-benchmark-desktop",
+  "productName": "Benchmark tailwind.reviews",
+  "version": "0.1.0",
+  "description": "Desktop agent for the tailwind.reviews market benchmark. Reads your invoices or payments on your computer and sends only rounded ratios.",
+  "license": "MIT",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "tailwind-benchmark-core": "0.1.0"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "reviews.tailwind.benchmark",
+    "productName": "Benchmark tailwind.reviews",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.business",
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
+  },
+  "author": "Tailwind Reviews LLC <support@tailwind.reviews>"
+}

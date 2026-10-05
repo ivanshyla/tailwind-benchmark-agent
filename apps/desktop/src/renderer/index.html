@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'; img-src 'self'"
+    />
+    <title>Benchmark tailwind.reviews</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <div class="brand">Benchmark <span>tailwind.reviews</span></div>
+        <div class="muted">Liczymy na Twoim komputerze. Wysyłamy tylko zaokrąglone procenty.</div>
+      </div>
+      <div id="calc-badge" class="badge">Sprawdzanie kalkulatora…</div>
+    </header>
+
+    <main>
+      <div class="col">
+        <section>
+          <h2><span class="step">1</span> Skąd czytamy dane</h2>
+          <div id="sources" class="sources"></div>
+          <div id="source-fields" class="fields"></div>
+          <label class="check"><input type="checkbox" id="remember" /> Zapamiętaj dane dostępowe na tym komputerze (zaszyfrowane)</label>
+        </section>
+
+        <section>
+          <h2><span class="step">2</span> Twoja firma i miesiąc</h2>
+          <div class="grid3">
+            <label>Branża<select id="category"></select></label>
+            <label>Miasto<select id="city"></select></label>
+            <label>Miesiąc<select id="period"></select></label>
+          </div>
+          <button id="fetch" class="primary">Policz na tym komputerze</button>
+          <p id="fetch-status" class="muted"></p>
+          <table id="counts" class="counts hidden"></table>
+        </section>
+
+        <section>
+          <h2><span class="step">3</span> Uzupełnij ręcznie (opcjonalnie)</h2>
+          <p class="muted">Tego nie ma w fakturach ani płatnościach.</p>
+          <div id="manual" class="fields"></div>
+        </section>
+
+        <section>
+          <h2><span class="step">4</span> To jedyne, co wyślemy</h2>
+          <pre id="preview">—</pre>
+          <button id="send" class="primary" disabled>Połącz z tailwind.reviews i wyślij</button>
+          <p class="muted">Otworzymy tailwind.reviews w przeglądarce. Zaloguj się, sprawdź kod i potwierdź — potwierdzona firma wysyła jeden sygnał na miesiąc.</p>
+          <div id="pairing" class="pairing hidden"></div>
+          <div id="result" class="result hidden"></div>
+        </section>
+      </div>
+
+      <aside>
+        <h3>Dziennik sieci</h3>
+        <p class="muted">Aplikacja może łączyć się tylko z wybranym źródłem danych i z tailwind.reviews. Każde połączenie jest tutaj.</p>
+        <ol id="net-log" class="net-log"></ol>
+        <button id="forget" class="link">Usuń zapamiętane dane dostępowe</button>
+      </aside>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>
