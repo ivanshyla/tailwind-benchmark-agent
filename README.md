@@ -14,6 +14,23 @@ your invoicing / payments ──► this app (your computer) ──► 7 rounded
    CSV / Excel                  runs calculator.v1.js        cancellations, CAC, pay
 ```
 
+## Install
+
+Download the installer for your system from
+[Releases](https://github.com/ivanshyla/tailwind-benchmark-agent/releases/latest).
+
+Releases are not yet signed with an Apple Developer ID or a Windows
+code-signing certificate, so the system warns on first launch:
+
+- **macOS** — open the app once, then System Settings → Privacy & Security →
+  "Open Anyway" for *Benchmark tailwind.reviews*.
+- **Windows** — "Windows protected your PC" → More info → Run anyway.
+- **Linux** — `chmod +x tailwind-benchmark-*.AppImage` and run it.
+
+Every release lists the SHA-256 of each file in `SHA256SUMS.txt`
+(`shasum -a 256 <file>` on macOS/Linux, `certutil -hashfile <file> SHA256` on
+Windows). Or build it yourself from this repository — see Development.
+
 ## What is sent
 
 Exactly the object the app shows in step 4 — the same one the website form sends
