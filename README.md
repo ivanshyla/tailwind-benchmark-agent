@@ -48,6 +48,17 @@ Exactly the object the app shows in step 4 — the same one the website form sen
 }
 ```
 
+`category` and `city` are not chosen in the app: when you approve the pairing,
+tailwind.reviews derives them from your business's Google Business profile and
+returns them with the ticket, and the server ignores any category or city a
+client sends. The app shows them before sending ("Według Google Business Twoja
+firma to: Sprzątanie, Warszawa").
+
+The server accepts a signal only with month-on-month growth (`growthMoM`) and
+at least 3 known metrics; the app checks this before pairing and lists what is
+missing. Accepted signals join the published market statistics within about
+24 hours.
+
 No business name, no tax number, no amounts, no counts, no cookies. Customer
 identifiers (tax numbers, e-mails) are only used in memory to tell repeat
 buyers apart, hashed with a key that exists for one run.
@@ -62,8 +73,11 @@ buyers apart, hashed with a key that exists for one run.
 2. **Only allowed hosts.** All network traffic goes through
    `packages/core/src/net.js`, which refuses any host that is not the data source
    you picked or tailwind.reviews, and logs every request in the window
-   ("Dziennik sieci"). The window itself is sandboxed and blocked from the network
-   (`apps/desktop/src/main.js`).
+   ("Dziennik sieci"). Redirects are never followed: a 3xx answer is refused
+   and logged, so an allowed host cannot forward a request elsewhere. A data
+   source's host is allowed only for the run that reads it. The window itself
+   is sandboxed and blocked from the network, and the app opens only
+   `https://tailwind.reviews` pages in your browser (`apps/desktop/src/main.js`).
 3. **Read-only access.** Connectors only list sales documents:
    - Fakturownia `GET /invoices.json`, inFakt `GET /invoices.json` + `/corrective_invoices.json`,
      wFirma `invoices/find`, Stripe `GET /v1/charges` (restricted read-only key).
@@ -72,11 +86,23 @@ buyers apart, hashed with a key that exists for one run.
      encrypted locally (RSA-OAEP-SHA256 with the Ministry's published key), only
      invoice **metadata** is read, never the invoice XML, and the session is
      logged out at the end. Use a token with only "Przeglądanie faktur".
-4. **One answer per business per month.** To send, you approve a short code on
-   tailwind.reviews while signed in; the site checks through Google Business that
-   you run the business and gives the app a one-time ticket. The app never sees
+4. **One answer per business per month.** To send, the app shows a short code
+   and opens tailwind.reviews/pl/benchmark/polacz; you sign in and type the code
+   there yourself (the link never contains the code — only enter a code that
+   your own app is showing). The site checks through Google Business that you
+   run the business and gives the app a one-time ticket. The app never sees
    your password. The server stores that your business took part, not what it
    answered.
+5. **Timing.** The server knows when your account approved the pairing. So
+   that the moment the answer arrives does not point back at that approval,
+   the app waits a random 30 s – 3 min (`crypto.randomInt`) before sending,
+   with a countdown you can cancel. This blurs, but does not eliminate, the
+   link: on a quiet day few approvals happen within any 3-minute window.
+6. **Stored credentials.** Optional, encrypted with the system keychain
+   (Electron `safeStorage`), and they stay in the app's main process: the
+   window only learns which fields are set (last 4 characters). On Linux
+   without a keyring (`basic_text` backend) nothing is written to disk and
+   credentials are kept only until the app closes.
 
 ## What it computes
 
@@ -91,8 +117,15 @@ From one finished month M and the 12 months before it
 | new customers in M | buyers with no purchase in the 12 months before |
 
 Inquiries, marketing spend and contractor pay are not in invoices; you can type
-them in (optional). Proformas and advance invoices are not orders. KSeF can
-undercount consumer (B2C) sales, which are optional there.
+them in (optional). Proformas and advance invoices are not orders (the final
+invoice that settles an advance is). KSeF can undercount consumer (B2C) sales,
+which are optional there; if more than 10 000 KSeF invoices share one issue
+date the connector stops with an error rather than undercount.
+
+Stripe: one succeeded, captured charge is one order. Only a **full** refund
+counts as a cancellation; a partially refunded charge still counts as a
+completed order (a discount on a job that happened). Charges with nothing
+captured are ignored.
 
 ## Development
 
