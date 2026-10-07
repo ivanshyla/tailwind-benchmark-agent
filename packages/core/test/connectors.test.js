@@ -77,6 +77,8 @@ test('infakt: grosze, header auth, corrections', async () => {
       entities: [
         { uuid: 'u1', kind: 'vat', invoice_date: '2026-09-01', client_tax_code: '111', gross_price: 12300 },
         { uuid: 'u2', kind: 'proforma', invoice_date: '2026-09-02', gross_price: 100 },
+        { uuid: 'u3', kind: 'advance', invoice_date: '2026-09-03', client_tax_code: '222', gross_price: 5000 },
+        { uuid: 'u4', kind: 'final', invoice_date: '2026-09-20', client_tax_code: '222', gross_price: 10000 },
       ],
     }),
     'GET api.infakt.pl/api/v3/corrective_invoices.json': () => ({
@@ -84,7 +86,11 @@ test('infakt: grosze, header auth, corrections', async () => {
     }),
   });
   const orders = await connectors.infakt.fetchOrders(net, { apiKey: 'K', from: '2025-09', to: '2026-09' });
-  assert.deepEqual(orders, [{ date: '2026-09-01', customer: '111', cancelled: true }]);
+  // The advance and its final invoice are one sale: only the final counts.
+  assert.deepEqual(orders, [
+    { date: '2026-09-01', customer: '111', cancelled: true },
+    { date: '2026-09-20', customer: '222', cancelled: false },
+  ]);
   assert.equal(net.calls[0].init.headers['X-inFakt-ApiKey'], 'K');
 });
 
@@ -128,6 +134,25 @@ test('stripe: succeeded charges, refunds, cursor pagination', async () => {
     { date: '2026-09-01', customer: 'cus_2', cancelled: true },
   ]);
   assert.equal(net.calls[1].url.searchParams.get('starting_after'), 'ch_2');
+});
+
+test('stripe: only a full refund cancels; uncaptured charges are not orders', async () => {
+  const net = new FakeNet({
+    'GET api.stripe.com/v1/charges': () => ({
+      has_more: false,
+      data: [
+        { id: 'ch_1', status: 'succeeded', created: 1788220800, captured: true, amount_captured: 1000, amount_refunded: 300, refunded: false, customer: 'cus_1' },
+        { id: 'ch_2', status: 'succeeded', created: 1788220800, captured: true, amount_captured: 1000, amount_refunded: 1000, refunded: true, customer: 'cus_2' },
+        { id: 'ch_3', status: 'succeeded', created: 1788220800, captured: false, amount_captured: 0, refunded: false, customer: 'cus_3' },
+        { id: 'ch_4', status: 'succeeded', created: 1788220800, amount_captured: 0, refunded: false, customer: 'cus_4' },
+      ],
+    }),
+  });
+  const orders = await connectors.stripe.fetchOrders(net, { apiKey: 'rk', from: '2025-09', to: '2026-09' });
+  assert.deepEqual(orders, [
+    { date: '2026-09-01', customer: 'cus_1', cancelled: false },
+    { date: '2026-09-01', customer: 'cus_2', cancelled: true },
+  ]);
 });
 
 test('ksef: windows stay under the 100-day limit', () => {
@@ -190,4 +215,97 @@ test('ksef: token encrypted RSA-OAEP-SHA256 as "token|timestampMs", metadata onl
   assert.ok(net.calls.some((c) => c.key.startsWith('DELETE')), 'logs the session out');
   const metadataCall = net.calls.find((c) => c.key.includes('query/metadata'));
   assert.equal(metadataCall.init.headers.Authorization, 'Bearer ACCESS');
+});
+
+// --- KSeF failure modes -------------------------------------------------------
+
+let ksefCert;
+function ksefCertificate() {
+  if (!ksefCert) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ksef-'));
+    execFileSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=Ministerstwo Finansow',
+      '-keyout', path.join(dir, 'k.pem'), '-out', path.join(dir, 'c.pem'), '-days', '1',
+    ], { stdio: 'ignore' });
+    ksefCert = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'c.pem'))).raw.toString('base64');
+  }
+  return ksefCert;
+}
+
+function ksefNet(routes) {
+  return new FakeNet({
+    'GET api.ksef.mf.gov.pl/v2/security/public-key-certificates': () => [
+      { certificate: ksefCertificate(), publicKeyId: 'tok', usage: ['KsefTokenEncryption'] },
+    ],
+    'POST api.ksef.mf.gov.pl/v2/auth/challenge': () => ({ challenge: 'CH', timestampMs: 1791000000000 }),
+    'POST api.ksef.mf.gov.pl/v2/auth/ksef-token': () => ({ referenceNumber: 'R1', authenticationToken: { token: 'AUTH' } }),
+    'GET api.ksef.mf.gov.pl/v2/auth/R1': () => ({ status: { code: 200 } }),
+    'POST api.ksef.mf.gov.pl/v2/auth/token/redeem': () => ({ accessToken: { token: 'ACCESS' } }),
+    'DELETE api.ksef.mf.gov.pl/v2/auth/sessions/current': () => ({}),
+    ...routes,
+  });
+}
+
+const ksefArgs = { nip: '1234567890', ksefToken: 'SECRET', from: '2025-09', to: '2026-09', authPollMs: 0 };
+
+test('ksef: unknown environment is a clear error, not a crash', async () => {
+  await assert.rejects(
+    connectors.ksef.fetchOrders(ksefNet({}), { ...ksefArgs, environment: 'production' }),
+    /unknown environment "production"/,
+  );
+});
+
+test('ksef: sign-in that never confirms fails instead of redeeming', async () => {
+  const net = ksefNet({ 'GET api.ksef.mf.gov.pl/v2/auth/R1': () => ({ status: { code: 100 } }) });
+  await assert.rejects(connectors.ksef.fetchOrders(net, ksefArgs), /did not confirm the sign-in within 30 checks/);
+  assert.equal(net.calls.filter((c) => c.key.endsWith('/auth/R1')).length, 30);
+  assert.ok(!net.calls.some((c) => c.key.includes('/token/redeem')), 'never redeems an unconfirmed sign-in');
+});
+
+test('ksef: truncated results continue from the last issue date as a DateTime', async () => {
+  const net = ksefNet({
+    'POST api.ksef.mf.gov.pl/v2/invoices/query/metadata': ({ init }) => {
+      const { from } = JSON.parse(init.body).dateRange;
+      if (from === '2025-09-01T00:00:00.000Z') {
+        return {
+          isTruncated: true,
+          hasMore: true,
+          invoices: [
+            { ksefNumber: 'K1', invoiceType: 'Vat', issueDate: '2025-09-01', invoiceHash: 'h1', grossAmount: 1 },
+            { ksefNumber: 'K2', invoiceType: 'Vat', issueDate: '2025-09-05', invoiceHash: 'h2', grossAmount: 1 },
+          ],
+        };
+      }
+      if (from === '2025-09-05T00:00:00.000Z') {
+        return {
+          hasMore: false,
+          invoices: [
+            { ksefNumber: 'K2', invoiceType: 'Vat', issueDate: '2025-09-05', invoiceHash: 'h2', grossAmount: 1 },
+            { ksefNumber: 'K3', invoiceType: 'Vat', issueDate: '2025-09-06', invoiceHash: 'h3', grossAmount: 1 },
+          ],
+        };
+      }
+      return { hasMore: false, invoices: [] };
+    },
+  });
+  const orders = await connectors.ksef.fetchOrders(net, ksefArgs);
+  assert.deepEqual(orders.map((o) => o.date), ['2025-09-01', '2025-09-05', '2025-09-06']);
+  for (const c of net.calls.filter((x) => x.key.includes('query/metadata'))) {
+    const { from, to } = JSON.parse(c.init.body).dateRange;
+    assert.match(from, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    assert.match(to, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  }
+});
+
+test('ksef: a capped batch that all shares one issue date stops instead of looping', async () => {
+  const net = ksefNet({
+    'POST api.ksef.mf.gov.pl/v2/invoices/query/metadata': () => ({
+      isTruncated: true,
+      hasMore: true,
+      invoices: [{ ksefNumber: 'K1', invoiceType: 'Vat', issueDate: '2025-09-01', invoiceHash: 'h1', grossAmount: 1 }],
+    }),
+  });
+  await assert.rejects(connectors.ksef.fetchOrders(net, ksefArgs), /more than 10 000 invoices issued on 2025-09-01/);
+  assert.equal(net.calls.filter((c) => c.key.includes('query/metadata')).length, 1);
+  assert.ok(net.calls.some((c) => c.key.startsWith('DELETE')), 'still logs the session out');
 });

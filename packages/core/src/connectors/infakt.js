@@ -10,6 +10,10 @@ const { ordersFromInvoices, amount } = require('./invoices');
  */
 const HOST = 'api.infakt.pl';
 const PAGE = 100;
+// Not orders (see invoices.js): a proforma is not a sale, and an advance
+// invoice (zaliczkowa) is settled by a final invoice that is counted, so
+// counting both would count one sale twice.
+const NOT_ORDER_KINDS = new Set(['proforma', 'advance']);
 
 async function listAll(net, path, apiKey, filters) {
   const out = [];
@@ -35,7 +39,7 @@ async function fetchOrders(net, { apiKey, from, to }) {
   };
 
   const invoices = (await listAll(net, 'invoices.json', apiKey, byIssue))
-    .filter((inv) => inv.kind !== 'proforma')
+    .filter((inv) => !NOT_ORDER_KINDS.has(inv.kind))
     .map((inv) => ({
       ref: inv.uuid,
       date: inv.invoice_date,

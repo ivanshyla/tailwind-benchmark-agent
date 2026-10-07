@@ -3,9 +3,14 @@
 const { dateRange } = require('../months');
 
 /**
- * Stripe: one successful charge = one order; a fully refunded charge counts
- * as cancelled. Works with a restricted key that can only read Charges
- * (Dashboard → Developers → API keys → Create restricted key → Charges: Read).
+ * Stripe: one successful, captured charge = one order. Works with a
+ * restricted key that can only read Charges (Dashboard → Developers → API
+ * keys → Create restricted key → Charges: Read).
+ *
+ * Cancellation rule, by decision: only a FULL refund (`refunded: true`) counts
+ * as a cancelled order. A partial refund is a discount or a goodwill gesture
+ * on a job that happened, so it still counts as a completed order. Charges
+ * with nothing captured (authorisations never captured) are not orders at all.
  */
 const HOST = 'api.stripe.com';
 
@@ -29,6 +34,7 @@ async function fetchOrders(net, { apiKey, from, to }) {
     });
     for (const charge of page.data) {
       if (charge.status !== 'succeeded') continue;
+      if (charge.captured === false || charge.amount_captured === 0) continue;
       orders.push({
         date: new Date(charge.created * 1000).toISOString().slice(0, 10),
         customer: charge.customer ?? charge.billing_details?.email ?? charge.receipt_email ?? null,

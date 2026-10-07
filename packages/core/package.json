@@ -1,6 +1,6 @@
 {
   "name": "tailwind-benchmark-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Open-source core of the tailwind.reviews market benchmark agent: reads your invoices or payments locally and computes the rounded ratios that are the only thing sent.",
   "license": "MIT",
   "main": "src/index.js",

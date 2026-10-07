@@ -4,7 +4,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { deriveRawInputs, historyFor } = require('../src/derive');
 const { loadCalculator } = require('../src/calculator');
+const http = require('node:http');
 const { Net } = require('../src/net');
+const { signalReadiness } = require('../src/pairing');
 const { guessMapping, ordersFromRows, parseDate, isCancelled } = require('../src/connectors/table');
 const { shiftMonth, dateRange } = require('../src/months');
 
@@ -64,6 +66,57 @@ test('net blocks hosts outside the allowlist', async () => {
   const net = new Net({ allowedHosts: ['api.tailwind.reviews'] });
   await assert.rejects(net.fetch('https://evil.example/x'), /not on the allowlist/);
   assert.equal(net.log.length, 0);
+});
+
+test('net never follows redirects and logs the refused one', async () => {
+  let hitTarget = false;
+  const server = http.createServer((req, res) => {
+    if (req.url === '/target') {
+      hitTarget = true;
+      res.end('{}');
+      return;
+    }
+    res.writeHead(307, { Location: 'http://evil.example/steal' });
+    res.end();
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const host = `127.0.0.1:${server.address().port}`;
+  const logged = [];
+  const net = new Net({ allowedHosts: [host], onLog: (e) => logged.push(e) });
+  try {
+    await assert.rejects(
+      net.json(`http://${host}/start`, { method: 'POST', body: '{"secret":1}' }),
+      /Blocked redirect from 127\.0\.0\.1:\d+ to evil\.example \(HTTP 307\)/,
+    );
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0].status, 307);
+    assert.match(logged[0].error, /redirect to evil\.example blocked/);
+    assert.equal(hitTarget, false);
+  } finally {
+    server.close();
+  }
+});
+
+test('net scopes connector allowances to one run', async () => {
+  const net = new Net({ allowedHosts: ['api.tailwind.reviews'] });
+  const run = net.scope();
+  run.allow('api.stripe.com');
+  assert.ok(run.allowedHosts.has('api.tailwind.reviews'));
+  await assert.rejects(net.fetch('https://api.stripe.com/v1/charges'), /not on the allowlist/);
+  assert.equal(run.log, net.log);
+});
+
+test('signal readiness: growthMoM and at least 3 metrics', () => {
+  const none = { growthMoM: null, growthYoY: null, conversion: null, repeat90: null, cancellation: null, cac: null, hourlyPay: null };
+  assert.deepEqual(signalReadiness({ ...none, growthMoM: 5, cancellation: 2, cac: 100 }).ok, true);
+  const noGrowth = signalReadiness({ ...none, conversion: 40, repeat90: 20, cancellation: 2, cac: 100 });
+  assert.equal(noGrowth.ok, false);
+  assert.equal(noGrowth.growthMissing, true);
+  const short = signalReadiness({ ...none, growthMoM: 5, cancellation: 0 });
+  assert.equal(short.ok, false);
+  assert.equal(short.short, 1);
+  assert.deepEqual(short.known, ['growthMoM', 'cancellation']);
+  assert.ok(short.missing.includes('cac'));
 });
 
 test('table connector guesses Polish headers and parses dates', () => {

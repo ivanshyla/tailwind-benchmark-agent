@@ -4,7 +4,7 @@ const { loadCalculator, verifyAgainstSite, CALCULATOR_SHA256, PROTOCOL_URL } = r
 const { deriveRawInputs, historyFor } = require('./derive');
 const { lastFullMonth, shiftMonth } = require('./months');
 const { Net } = require('./net');
-const { startPairing, waitForTicket, sendSignal, DEFAULT_API } = require('./pairing');
+const { startPairing, waitForTicket, sendSignal, signalReadiness, MIN_METRICS, DEFAULT_API } = require('./pairing');
 const table = require('./connectors/table');
 
 const connectors = {
@@ -30,5 +30,7 @@ module.exports = {
   startPairing,
   waitForTicket,
   sendSignal,
+  signalReadiness,
+  MIN_METRICS,
   DEFAULT_API,
 };

@@ -21,6 +21,7 @@ const ENVIRONMENTS = {
   test: 'https://api-test.ksef.mf.gov.pl/v2',
 };
 const MAX_RANGE_DAYS = 90; // API limit is 100 days
+const AUTH_POLL_ROUNDS = 30;
 const PAGE = 250;
 const ORDER_TYPES = new Set(['Vat', 'Upr', 'Roz', 'VatPef', 'VatPefSp', 'VatRr']);
 const CORRECTION_TYPES = new Set(['Kor', 'KorRoz', 'KorPef', 'KorVatRr']);
@@ -29,7 +30,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const bearer = (token) => ({ Authorization: `Bearer ${token}` });
 const tokenOf = (t) => (typeof t === 'string' ? t : t?.token);
 
-async function authenticate(net, base, { nip, ksefToken }) {
+async function authenticate(net, base, { nip, ksefToken, pollMs = 1000 }) {
   const certs = await net.json(`${base}/security/public-key-certificates`);
   const cert = (Array.isArray(certs) ? certs : certs?.certificates ?? []).find((c) =>
     (c.usage ?? []).includes('KsefTokenEncryption'),
@@ -57,12 +58,16 @@ async function authenticate(net, base, { nip, ksefToken }) {
   });
   const authToken = tokenOf(init.authenticationToken);
 
-  for (let i = 0; i < 30; i += 1) {
+  let authenticated = false;
+  for (let i = 0; i < AUTH_POLL_ROUNDS && !authenticated; i += 1) {
     const status = await net.json(`${base}/auth/${init.referenceNumber}`, { headers: bearer(authToken) });
     const code = status?.status?.code;
-    if (code === 200) break;
-    if (code && code >= 400) throw new Error(`KSeF auth refused: ${status.status.description ?? code}`);
-    await sleep(1000);
+    if (code === 200) authenticated = true;
+    else if (code && code >= 400) throw new Error(`KSeF auth refused: ${status.status.description ?? code}`);
+    else await sleep(pollMs);
+  }
+  if (!authenticated) {
+    throw new Error(`KSeF did not confirm the sign-in within ${AUTH_POLL_ROUNDS} checks. Try again in a few minutes.`);
   }
 
   const tokens = await net.json(`${base}/auth/token/redeem`, { method: 'POST', headers: bearer(authToken) });
@@ -80,6 +85,17 @@ function windows(from, to) {
     start = new Date(stop.getTime() + 1000);
   }
   return out;
+}
+
+/**
+ * dateRange.from/to are DateTime (ISO 8601) in the KSeF 2.0 OpenAPI, while
+ * issueDate in the metadata is a date only. Start of that day in UTC.
+ */
+function issueDateTime(issueDate) {
+  const s = String(issueDate);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T00:00:00Z`) : new Date(s);
+  if (Number.isNaN(d.getTime())) throw new Error(`KSeF: unreadable issueDate ${s}`);
+  return d.toISOString();
 }
 
 async function queryMetadata(net, base, accessToken, window) {
@@ -103,7 +119,17 @@ async function queryMetadata(net, base, accessToken, window) {
     rows.push(...(res.invoices ?? []));
     if (res.isTruncated && res.invoices?.length) {
       // 10 000-record cap per filter: continue from the last record's date.
-      from = res.invoices[res.invoices.length - 1].issueDate;
+      // Rows from that day come back again and are de-duplicated by
+      // ksefNumber. If the whole capped batch shares one issue date, the next
+      // query would be the same one, forever; skipping the rest of that day
+      // would silently undercount, so stop instead.
+      const next = issueDateTime(res.invoices[res.invoices.length - 1].issueDate);
+      if (new Date(next) <= new Date(from)) {
+        throw new Error(
+          `KSeF returned more than 10 000 invoices issued on ${next.slice(0, 10)}; this connector cannot page past that. Use a CSV export instead.`,
+        );
+      }
+      from = next;
       offset = -1;
       continue;
     }
@@ -112,11 +138,15 @@ async function queryMetadata(net, base, accessToken, window) {
   return rows;
 }
 
-async function fetchOrders(net, { nip, ksefToken, environment = 'prod', from, to }) {
-  const base = ENVIRONMENTS[environment];
+async function fetchOrders(net, { nip, ksefToken, environment, from, to, authPollMs }) {
+  const env = environment || 'prod';
+  if (!Object.hasOwn(ENVIRONMENTS, env)) {
+    throw new Error(`KSeF: unknown environment "${env}" (use ${Object.keys(ENVIRONMENTS).join(', ')})`);
+  }
+  const base = ENVIRONMENTS[env];
   net.allow(new URL(base).host);
   const range = dateRange(from, to);
-  const accessToken = await authenticate(net, base, { nip, ksefToken });
+  const accessToken = await authenticate(net, base, { nip, ksefToken, pollMs: authPollMs });
   try {
     const seen = new Set();
     const all = [];
@@ -150,4 +180,5 @@ module.exports = {
   fields: ['nip', 'ksefToken', 'environment'],
   fetchOrders,
   windows,
+  issueDateTime,
 };
