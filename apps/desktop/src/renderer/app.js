@@ -55,6 +55,17 @@ const MANUAL = [
   ['hourlyPay', 'Średnia stawka brutto wykonawcy za godzinę (zł)'],
 ];
 
+// What each metric needs, for the "not enough to send" hint.
+const METRICS = {
+  growthMoM: ['Wzrost miesiąc do miesiąca', 'potrzebne zamówienia z poprzedniego miesiąca (krok 2)'],
+  growthYoY: ['Wzrost rok do roku', 'potrzebne zamówienia sprzed 12 miesięcy (krok 2)'],
+  conversion: ['Konwersja zapytań', 'wpisz zapytania i ile z nich zamieniło się w zamówienie (krok 3)'],
+  repeat90: ['Powracający klienci', 'potrzebne źródło z identyfikatorem klienta i dane sprzed 3 miesięcy (krok 2)'],
+  cancellation: ['Anulowania', 'policz dane z wybranego źródła (krok 2)'],
+  cac: ['Koszt pozyskania klienta', 'wpisz wydatki na marketing (krok 3)'],
+  hourlyPay: ['Stawka wykonawcy', 'wpisz średnią stawkę za godzinę (krok 3)'],
+};
+
 const COUNT_LABELS = {
   orders: 'Zamówienia w miesiącu',
   ordersPrevMonth: 'Zamówienia miesiąc wcześniej',
@@ -67,7 +78,9 @@ const COUNT_LABELS = {
 };
 
 const $ = (id) => document.getElementById(id);
-const state = { source: 'fakturownia', values: {}, mapping: null, counts: null, saved: {} };
+// `values` holds only what was typed in this window; stored secrets stay in
+// the main process and `saved` only says which fields are set (masked).
+const state = { source: 'fakturownia', values: {}, mapping: null, counts: null, saved: {}, storage: { ok: true } };
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -102,7 +115,7 @@ function renderSources() {
         text: s.label,
         onclick: () => {
           state.source = id;
-          state.values = { ...(state.saved[id] ?? {}) };
+          state.values = {};
           state.counts = null;
           renderSources();
           renderFields();
@@ -118,18 +131,16 @@ function renderFields() {
   const s = SOURCES[state.source];
   const nodes = [];
   if (s.note) nodes.push(el('p', { class: 'muted', text: s.note }));
+  const saved = state.saved[state.source] ?? {};
   for (const [key, label, type] of s.fields) {
-    nodes.push(
-      el('label', {}, [
-        label,
-        el('input', {
-          type: type ?? 'text',
-          value: state.values[key] ?? '',
-          autocomplete: 'off',
-          oninput: (e) => (state.values[key] = e.target.value.trim()),
-        }),
-      ]),
-    );
+    const attrs = {
+      type: type ?? 'text',
+      value: state.values[key] ?? '',
+      autocomplete: 'off',
+      oninput: (e) => (state.values[key] = e.target.value.trim()),
+    };
+    if (saved[key]) attrs.placeholder = `ustawione (${saved[key]}) — zostaw puste, aby użyć; wpisz, aby zmienić`;
+    nodes.push(el('label', {}, [label, el('input', attrs)]));
   }
   if (state.source === 'file') {
     nodes.push(el('button', { class: 'secondary', text: 'Wybierz plik…', onclick: pickFile }));
@@ -186,7 +197,7 @@ function renderCounts() {
   );
 }
 
-const cell = () => ({ category: $('category').value, city: $('city').value, period: $('period').value });
+const period = () => $('period').value;
 
 function raw() {
   const manual = Object.fromEntries(
@@ -198,9 +209,37 @@ function raw() {
 }
 
 async function refreshPreview() {
-  const signal = await agent.preview({ cell: cell(), raw: raw() });
+  const { signal, readiness } = await agent.preview({ period: period(), raw: raw() });
   $('preview').textContent = JSON.stringify(signal, null, 2);
-  $('send').disabled = !Object.values(signal.metrics).some((v) => v !== null);
+  $('send').disabled = !readiness.ok;
+  renderReadiness(readiness);
+}
+
+// The server refuses a signal without month-on-month growth or with fewer
+// than three metrics; say what is missing before a pairing is started.
+function renderReadiness(readiness) {
+  const box = $('readiness');
+  if (readiness.ok) {
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  const items = [];
+  if (readiness.growthMissing) {
+    items.push(el('li', { text: `${METRICS.growthMoM[0]} jest wymagany: ${METRICS.growthMoM[1]}.` }));
+  }
+  if (readiness.short > 0) {
+    for (const key of readiness.missing.filter((k) => k !== 'growthMoM' && METRICS[k])) {
+      items.push(el('li', { text: `${METRICS[key][0]}: ${METRICS[key][1]}.` }));
+    }
+  }
+  const known = readiness.known.length;
+  box.replaceChildren(
+    el('strong', {
+      text: `Za mało, by wysłać: potrzebny wzrost m/m i co najmniej ${readiness.required} wskaźniki (jest ${known}).`,
+    }),
+    el('ul', {}, items),
+  );
 }
 
 async function fetchData() {
@@ -212,13 +251,15 @@ async function fetchData() {
       source: state.source,
       values: state.values,
       mapping: state.mapping?.mapping,
-      period: cell().period,
+      period: period(),
+      remember: $('remember').checked && state.storage.ok,
     });
     state.counts = res.raw;
     status.textContent = `Gotowe: ${res.orderCount} zamówień z ${res.monthsWithData} miesięcy${res.skipped ? `, pominięto ${res.skipped} wierszy bez daty` : ''}.`;
-    if ($('remember').checked && state.source !== 'file') {
-      await agent.saveCredentials(state.source, state.values);
-      state.saved[state.source] = { ...state.values };
+    if (res.credentials) {
+      state.saved[state.source] = res.credentials;
+      state.values = {};
+      renderFields();
     }
   } catch (error) {
     status.textContent = `Nie udało się: ${error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`;
@@ -232,14 +273,19 @@ async function fetchData() {
 const REFUSALS = {
   no_verified_business: 'Połącz Google Business na tailwind.reviews dla firmy, której wizytówką w Mapach Google zarządzasz.',
   already_participated: 'Twoja firma już wysłała sygnał za ten miesiąc.',
+  not_enough_metrics: 'Za mało wskaźników, by wysłać — uzupełnij brakujące dane.',
+  send_in_progress: 'Wysyłanie już trwa.',
+  'Pairing cancelled': 'Anulowano. Nic nie zostało wysłane.',
 };
+
+const label = (list, slug) => list.find(([v]) => v === slug)?.[1] ?? slug;
 
 async function send() {
   const box = $('pairing');
   $('send').disabled = true;
   $('result').classList.add('hidden');
   try {
-    const res = await agent.send({ cell: cell(), raw: raw() });
+    const res = await agent.send({ period: period(), raw: raw() });
     box.classList.add('hidden');
     $('result').classList.remove('hidden');
     $('result').replaceChildren(
@@ -253,17 +299,49 @@ async function send() {
     const reason = Object.keys(REFUSALS).find((r) => msg.includes(r));
     box.replaceChildren(el('p', { class: 'error', text: reason ? REFUSALS[reason] : `Nie wysłano: ${msg.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}` }));
   } finally {
-    $('send').disabled = false;
+    clearInterval(state.countdown);
+    refreshPreview();
   }
 }
 
-function showPairing({ code, expiresIn }) {
+function showPairing({ code, page, expiresIn }) {
   const box = $('pairing');
   box.classList.remove('hidden');
   box.replaceChildren(
-    el('p', { text: 'Otworzyliśmy tailwind.reviews w przeglądarce. Sprawdź, czy widzisz ten sam kod, i potwierdź:' }),
+    el('p', { text: 'Twój kod:' }),
     el('div', { class: 'code', text: code }),
+    el('p', {
+      text: `Wejdź sam na ${page} (właśnie ją otworzyliśmy), zaloguj się i wpisz tam ten kod. Wpisuj go tylko na tej stronie i tylko wtedy, gdy sam kliknąłeś „Wyślij” w tej aplikacji — nikt z tailwind.reviews nie poprosi Cię o kod.`,
+    }),
     el('p', { class: 'muted', text: `Kod ważny ${Math.round(expiresIn / 60)} minut. Czekamy na potwierdzenie…` }),
+    el('button', { class: 'link', text: 'Anuluj', onclick: () => agent.cancel() }),
+  );
+}
+
+function showApproved({ category, city, delayMs }) {
+  const box = $('pairing');
+  const sendAt = Date.now() + delayMs;
+  const clock = el('div', { class: 'countdown' });
+  const tick = () => {
+    const left = Math.max(0, Math.round((sendAt - Date.now()) / 1000));
+    clock.textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  };
+  tick();
+  clearInterval(state.countdown);
+  state.countdown = setInterval(tick, 1000);
+  box.classList.remove('hidden');
+  box.replaceChildren(
+    el('p', {}, [
+      'Potwierdzone. Według Google Business Twoja firma to: ',
+      el('strong', { text: `${label(CATEGORIES, category)}, ${label(CITIES, city)}` }),
+      '. W tej komórce rynku zostanie policzona Twoja odpowiedź.',
+    ]),
+    el('p', { text: 'Wyślemy za:' }),
+    clock,
+    el('p', {
+      class: 'muted',
+      text: 'Czekamy losowy czas (od 30 s do 3 min), żeby moment wysłania nie łączył Twojej odpowiedzi z Twoim kontem. Anulowanie teraz nic nie wyśle; ten miesiąc może być już wtedy oznaczony jako wykorzystany.',
+    }),
     el('button', { class: 'link', text: 'Anuluj', onclick: () => agent.cancel() }),
   );
 }
@@ -274,7 +352,8 @@ function logEntry(entry) {
     el('li', { class: ok ? '' : 'bad' }, [
       el('span', { class: 'method', text: entry.method }),
       ` ${entry.url} `,
-      el('span', { class: 'status', text: entry.status ? String(entry.status) : '…' }),
+      el('span', { class: 'status', text: entry.status ? String(entry.status) : entry.error ? 'błąd' : '…' }),
+      entry.error ? el('span', { class: 'muted', text: ` · ${entry.error}` }) : '',
       entry.bytesSent ? el('span', { class: 'muted', text: ` · wysłano ${entry.bytesSent} B` }) : '',
     ]),
   );
@@ -282,12 +361,21 @@ function logEntry(entry) {
 
 async function init() {
   state.manual = {};
-  state.saved = await agent.loadCredentials();
-  state.values = { ...(state.saved[state.source] ?? {}) };
-  fillSelect($('category'), CATEGORIES);
-  fillSelect($('city'), CITIES);
+  const creds = await agent.loadCredentials();
+  state.saved = creds.sources;
+  state.storage = creds.storage;
+  if (!state.storage.ok) {
+    $('remember').checked = false;
+    $('remember').disabled = true;
+    const note = $('storage-note');
+    note.classList.remove('hidden');
+    note.textContent =
+      state.storage.reason === 'basic_text'
+        ? 'Brak systemowego pęku kluczy (np. GNOME Keyring / KWallet) — nie zapisujemy danych dostępowych na dysku. Pamiętamy je tylko do zamknięcia aplikacji.'
+        : 'Szyfrowanie systemowe niedostępne — nie zapisujemy danych dostępowych na dysku. Pamiętamy je tylko do zamknięcia aplikacji.';
+  }
   fillSelect($('period'), months());
-  for (const id of ['category', 'city', 'period']) $(id).addEventListener('change', refreshPreview);
+  $('period').addEventListener('change', refreshPreview);
   renderSources();
   renderFields();
   renderManual();
@@ -297,9 +385,11 @@ async function init() {
   $('forget').addEventListener('click', async () => {
     await agent.forgetCredentials();
     state.saved = {};
+    renderFields();
   });
   agent.onNetLog(logEntry);
   agent.onPairing(showPairing);
+  agent.onPairingApproved(showApproved);
 
   const badge = $('calc-badge');
   const v = await agent.verifyCalculator();

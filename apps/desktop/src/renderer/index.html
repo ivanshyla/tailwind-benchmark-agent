@@ -25,15 +25,15 @@
           <div id="sources" class="sources"></div>
           <div id="source-fields" class="fields"></div>
           <label class="check"><input type="checkbox" id="remember" /> Zapamiętaj dane dostępowe na tym komputerze (zaszyfrowane)</label>
+          <p id="storage-note" class="muted hidden"></p>
         </section>
 
         <section>
-          <h2><span class="step">2</span> Twoja firma i miesiąc</h2>
+          <h2><span class="step">2</span> Miesiąc</h2>
           <div class="grid3">
-            <label>Branża<select id="category"></select></label>
-            <label>Miasto<select id="city"></select></label>
             <label>Miesiąc<select id="period"></select></label>
           </div>
+          <p class="muted">Branżę i miasto ustala tailwind.reviews z wizytówki Google Business Twojej firmy — zobaczysz je przed wysłaniem.</p>
           <button id="fetch" class="primary">Policz na tym komputerze</button>
           <p id="fetch-status" class="muted"></p>
           <table id="counts" class="counts hidden"></table>
@@ -48,8 +48,9 @@
         <section>
           <h2><span class="step">4</span> To jedyne, co wyślemy</h2>
           <pre id="preview">—</pre>
+          <div id="readiness" class="readiness hidden"></div>
           <button id="send" class="primary" disabled>Połącz z tailwind.reviews i wyślij</button>
-          <p class="muted">Otworzymy tailwind.reviews w przeglądarce. Zaloguj się, sprawdź kod i potwierdź — potwierdzona firma wysyła jeden sygnał na miesiąc.</p>
+          <p class="muted">Pokażemy kod i otworzymy tailwind.reviews/pl/benchmark/polacz. Zaloguj się i sam wpisz tam kod z aplikacji — potwierdzona firma wysyła jeden sygnał na miesiąc. Wysłane odpowiedzi pojawiają się w statystykach rynku w ciągu ok. 24 godzin.</p>
           <div id="pairing" class="pairing hidden"></div>
           <div id="result" class="result hidden"></div>
         </section>
